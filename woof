@@ -55,7 +55,7 @@ def find_ip ():
       netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
       defiface = [i.split ()[-1] for i in netstat.split ('\n')
                                     if i.split ()[0] == "0.0.0.0"]
-   elif platform in ("Darwin", "FreeBSD"):
+   elif platform in ("Darwin", "FreeBSD", "NetBSD"):
       netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
       defiface = [i.split ()[-1] for i in netstat.split ('\n')
                                     if len(i) > 2 and i.split ()[0] == "default"]
@@ -73,7 +73,7 @@ def find_ip ():
    if platform == "Linux":
       ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
                                   + defiface[0]).split ("inet addr:")
-   elif platform in ("Darwin", "FreeBSD", "SunOS"):
+   elif platform in ("Darwin", "FreeBSD", "SunOS", "NetBSD"):
       ifcfg = commands.getoutput ("LC_MESSAGES=C ifconfig "
                                   + defiface[0]).split ("inet ")
 
