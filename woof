@@ -2,7 +2,7 @@
 # -*- encoding: utf-8 -*-
 #
 #  woof -- an ad-hoc single file webserver
-#  Copyright (C) 2004 Simon Budig  <simon@budig.de>
+#  Copyright (C) 2004-2009 Simon Budig  <simon@budig.de>
 # 
 #  This program is free software; you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 # Solaris support by Colin Marquardt, <colin.marquardt@zmd.de>
 # FreeBSD support with the help from Andy Gimblett, <A.M.Gimblett@swansea.ac.uk>
 # Cygwin support by Stefan Reichör <stefan@xsteve.at>
+# tarfile usage suggested by Morgan Lefieux <comete@geekandfree.org>
 
 import sys, os, socket, getopt, commands
 import urllib, BaseHTTPServer
@@ -146,12 +147,9 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
       # multiple downloads can happen simultaneously.
 
       cpid = os.fork ()
-      os.setpgrp ()
 
       if cpid == 0:
          # Child process
-         size = -1
-         datafile = None
          child = None
          type = None
          
@@ -171,7 +169,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                               os.path.getsize (self.filename))
          self.end_headers ()
 
-         if 1:
+         try:
             if type == "file":
                datafile = file (self.filename)
                shutil.copyfileobj (datafile, self.wfile)
@@ -182,8 +180,8 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                tfile.add (self.filename,
                           arcname=os.path.basename(self.filename))
                tfile.close ()
-       # except:
-       #    print >>sys.stderr, "Connection broke. Aborting"
+         except:
+            print >>sys.stderr, "Connection broke. Aborting"
 
 
 def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
@@ -243,7 +241,7 @@ def usage (defport, defmaxdown, errmsg = None):
         count = 2
         ip = 127.0.0.1
         compressed = gz
-   """ % (name, name, name, defmaxdown, defport)
+   """ % (name, name, name, name, defmaxdown, defport)
    if errmsg:
       print >>sys.stderr, errmsg
       print >>sys.stderr
