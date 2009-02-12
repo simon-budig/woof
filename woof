@@ -24,13 +24,14 @@
 # FreeBSD support with the help from Andy Gimblett, <A.M.Gimblett@swansea.ac.uk>
 # Cygwin support by Stefan Reichör <stefan@xsteve.at>
 
-import sys, os, popen2, signal, select, socket, getopt, commands
+import sys, os, socket, getopt, commands
 import urllib, BaseHTTPServer
 import ConfigParser
+import shutil, tarfile
 
 maxdownloads = 1
 cpid = -1
-compressed = True
+compressed = 'gz'
 
 
 # Utility function to guess the IP (as a string) where the server can be
@@ -118,8 +119,10 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
       self.path = urllib.quote (urllib.unquote (self.path))
       location = "/" + urllib.quote (os.path.basename (self.filename))
       if os.path.isdir (self.filename):
-         if compressed:
+         if compressed == 'gz':
             location += ".tar.gz"
+         elif compressed == 'bz2':
+            location += ".tar.bz2"
          else:
             location += ".tar"
 
@@ -150,44 +153,38 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
          size = -1
          datafile = None
          child = None
+         type = None
          
          if os.path.isfile (self.filename):
-            size = os.path.getsize (self.filename)
-            datafile = open (self.filename)
+            type = "file"
          elif os.path.isdir (self.filename):
-            os.environ['woof_dir'], os.environ['woof_file'] = os.path.split (self.filename)
-            if compressed:
-               arg = 'z'
-            else:
-               arg = ''
-            child = popen2.Popen3 ('cd "$woof_dir";tar c%sf - "$woof_file"' % arg)
-            datafile = child.fromchild
+            type = "dir"
+
+         if not type:
+            print >> sys.stderr, "can only serve files or directories. Aborting."
+            sys.exit (1)
 
          self.send_response (200)
          self.send_header ("Content-type", "application/octet-stream")
-         if size >= 0:
-            self.send_header ("Content-Length", size)
+         if os.path.isfile (self.filename):
+            self.send_header ("Content-Length",
+                              os.path.getsize (self.filename))
          self.end_headers ()
 
-         try:
-            try:
-               while 1:
-                  if select.select ([datafile], [], [], 2)[0]:
-                     c = datafile.read (1024)
-                     if c:
-                        self.wfile.write (c)
-                     else:
-                        datafile.close ()
-                        break
-            except:
-               print >>sys.stderr, "Connection broke. Aborting"
+         if 1:
+            if type == "file":
+               datafile = file (self.filename)
+               shutil.copyfileobj (datafile, self.wfile)
+               datafile.close ()
+            elif type == "dir":
+               tfile = tarfile.open (mode=('w|' + compressed),
+                                     fileobj=self.wfile)
+               tfile.add (self.filename,
+                          arcname=os.path.basename(self.filename))
+               tfile.close ()
+       # except:
+       #    print >>sys.stderr, "Connection broke. Aborting"
 
-         finally:
-            # for some reason tar doesnt stop working when the pipe breaks
-            if child:
-               if child.poll ():
-                  os.killpg (os.getpgid (child.pid), signal.SIGTERM)
-               
 
 def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
    global maxdownloads
@@ -219,21 +216,25 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
 def usage (defport, defmaxdown, errmsg = None):
    name = os.path.basename (sys.argv[0])
    print >>sys.stderr, """
-    Usage: %s [-i <ip_addr>] [-p <port>] [-c <count>] [-u] <file/dir>
-           %s [-i <ip_addr>] [-p <port>] [-c <count>] [-u] -s
+    Usage: %s [-i <ip_addr>] [-p <port>] [-c <count>] <file>
+           %s [-i <ip_addr>] [-p <port>] [-c <count>] [-z|-j|-u] <dir>
+           %s [-i <ip_addr>] [-p <port>] [-c <count>] -s
    
     Serves a single file <count> times via http on port <port> on IP
     address <ip_addr>.
-    When a directory is specified, a .tar.gz archive gets served (or an
-    uncompressed tar archive when -u is specified), when -s is specified
-    instead of a filename, %s distributes itself.
+    When a directory is specified, an tar archive gets served. By default
+    it is gzip compressed. You can specify -z for gzip compression, 
+    -j for bzip2 compression or -u for no compression. You can configure your
+    default compression method in the configuration file described below.
+
+    When -s is specified instead of a filename, %s distributes itself.
    
     defaults: count = %d, port = %d
 
     You can specify different defaults in two locations: /etc/woofrc
     and ~/.woofrc can be INI-style config files containing the default
     port and the default count. The file in the home directory takes
-    precedence.
+    precedence. The compression methods are "off", "gz" or "bz2".
 
     Sample file:
 
@@ -241,7 +242,7 @@ def usage (defport, defmaxdown, errmsg = None):
         port = 8008
         count = 2
         ip = 127.0.0.1
-        compressed = true
+        compressed = gz
    """ % (name, name, name, defmaxdown, defport)
    if errmsg:
       print >>sys.stderr, errmsg
@@ -270,13 +271,20 @@ def main ():
       ip_addr = config.get ('main', 'ip')
 
    if config.has_option ('main', 'compressed'):
-      compressed = config.getboolean ('main', 'compressed')
+      formats = { 'gz'    : 'gz',
+                  'true'  : 'gz',
+                  'bz'    : 'bz2',
+                  'bz2'   : 'bz2',
+                  'off'   : '',
+                  'false' : '' }
+      compressed = config.get ('main', 'compressed')
+      compressed = formats.get (compressed, 'gz')
 
    defaultport = port
    defaultmaxdown = maxdown
 
    try:
-      options, filenames = getopt.getopt (sys.argv[1:], "hsui:c:p:")
+      options, filenames = getopt.getopt (sys.argv[1:], "hszjui:c:p:")
    except getopt.GetoptError, desc:
       usage (defaultport, defaultmaxdown, desc)
 
@@ -307,8 +315,12 @@ def main ():
       elif option == '-h':
          usage (defaultport, defaultmaxdown)
 
+      elif option == '-z':
+         compressed = 'gz'
+      elif option == '-j':
+         compressed = 'bz2'
       elif option == '-u':
-         compressed = False
+         compressed = ''
 
       else:
          usage (defaultport, defaultmaxdown, "Unknown option: %r" % option)
