@@ -28,11 +28,63 @@
 import sys, os, socket, getopt, commands
 import urllib, BaseHTTPServer
 import ConfigParser
-import shutil, tarfile
+import shutil, tarfile, zipfile
+import struct
 
 maxdownloads = 1
+TM = object
 cpid = -1
 compressed = 'gz'
+
+
+class EvilZipStreamWrapper(TM):
+   def __init__ (self, victim):
+      self.victim_fd = victim
+      self.position = 0
+      self.tells = []
+      self.in_file_data = 0
+
+   def tell (self):
+      self.tells.append (self.position)
+      return self.position
+
+   def seek (self, offset, whence = 0):
+      if offset != 0:
+         if offset == self.tells[0] + 14:
+            # the zipfile module tries to fix up the file header.
+            # write Data descriptor header instead,
+            # the next write from zipfile
+            # is CRC, compressed_size and file_size (as required)
+            self.write ("PK\007\010")
+         elif offset == self.tells[1]:
+            # the zipfile module goes to the end of the file. The next
+            # data written definitely is infrastructure (in_file_data = 0)
+            self.tells = []
+            self.in_file_data = 0
+         else:
+            raise "unexpected seek for EvilZipStreamWrapper"
+
+   def write (self, data):
+      # only test for headers if we know that we're not writing
+      # (potentially compressed) data.
+      if self.in_file_data == 0:
+         if data[:4] == zipfile.stringFileHeader:
+            # fix the file header for extra Data descriptor
+            hdr = list (struct.unpack (zipfile.structFileHeader, data[:30]))
+            hdr[3] |= (1 << 3)
+            data = struct.pack (zipfile.structFileHeader, *hdr) + data[30:]
+            self.in_file_data = 1
+         elif data[:4] == zipfile.stringCentralDir:
+            # fix the directory entry to match file header.
+            hdr = list (struct.unpack (zipfile.structCentralDir, data[:46]))
+            hdr[5] |= (1 << 3)
+            data = struct.pack (zipfile.structCentralDir, *hdr) + data[46:]
+
+      self.position += len (data)
+      self.victim_fd.write (data)
+
+   def __getattr__ (self, name):
+      return getattr (self.victim_fd, name)
 
 
 # Utility function to guess the IP (as a string) where the server can be
@@ -124,6 +176,8 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
             location += ".tar.gz"
          elif compressed == 'bz2':
             location += ".tar.bz2"
+         elif compressed == 'zip':
+            location += ".zip"
          else:
             location += ".tar"
 
@@ -175,12 +229,26 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                shutil.copyfileobj (datafile, self.wfile)
                datafile.close ()
             elif type == "dir":
-               tfile = tarfile.open (mode=('w|' + compressed),
-                                     fileobj=self.wfile)
-               tfile.add (self.filename,
-                          arcname=os.path.basename(self.filename))
-               tfile.close ()
-         except:
+               if compressed == 'zip':
+                  ezfile = EvilZipStreamWrapper (self.wfile)
+                  zfile = zipfile.ZipFile (ezfile, 'w', zipfile.ZIP_DEFLATED)
+		  stripoff = os.path.dirname (self.filename) + os.sep
+
+                  for root, dirs, files in os.walk (self.filename):
+                     for file in files:
+                        filename = os.path.join (root, file)
+			if filename[:len (stripoff)] != stripoff:
+			   raise RuntimeException, "invalid filename assumptions, please report!"
+                        zfile.write (filename, filename[len (stripoff):])
+                  zfile.close ()
+               else:
+                  tfile = tarfile.open (mode=('w|' + compressed),
+                                        fileobj=self.wfile)
+                  tfile.add (self.filename,
+                             arcname=os.path.basename(self.filename))
+                  tfile.close ()
+         except Exception, e:
+            print e
             print >>sys.stderr, "Connection broke. Aborting"
 
 
@@ -215,15 +283,16 @@ def usage (defport, defmaxdown, errmsg = None):
    name = os.path.basename (sys.argv[0])
    print >>sys.stderr, """
     Usage: %s [-i <ip_addr>] [-p <port>] [-c <count>] <file>
-           %s [-i <ip_addr>] [-p <port>] [-c <count>] [-z|-j|-u] <dir>
+           %s [-i <ip_addr>] [-p <port>] [-c <count>] [-z|-j|-Z|-u] <dir>
            %s [-i <ip_addr>] [-p <port>] [-c <count>] -s
    
     Serves a single file <count> times via http on port <port> on IP
     address <ip_addr>.
     When a directory is specified, an tar archive gets served. By default
     it is gzip compressed. You can specify -z for gzip compression, 
-    -j for bzip2 compression or -u for no compression. You can configure your
-    default compression method in the configuration file described below.
+    -j for bzip2 compression, -Z for ZIP compression or -u for no compression.
+    You can configure your default compression method in the configuration 
+    file described below.
 
     When -s is specified instead of a filename, %s distributes itself.
    
@@ -232,7 +301,7 @@ def usage (defport, defmaxdown, errmsg = None):
     You can specify different defaults in two locations: /etc/woofrc
     and ~/.woofrc can be INI-style config files containing the default
     port and the default count. The file in the home directory takes
-    precedence. The compression methods are "off", "gz" or "bz2".
+    precedence. The compression methods are "off", "gz", "bz2" or "zip".
 
     Sample file:
 
@@ -273,6 +342,7 @@ def main ():
                   'true'  : 'gz',
                   'bz'    : 'bz2',
                   'bz2'   : 'bz2',
+                  'zip'   : 'zip',
                   'off'   : '',
                   'false' : '' }
       compressed = config.get ('main', 'compressed')
@@ -282,7 +352,7 @@ def main ():
    defaultmaxdown = maxdown
 
    try:
-      options, filenames = getopt.getopt (sys.argv[1:], "hszjui:c:p:")
+      options, filenames = getopt.getopt (sys.argv[1:], "hszjZui:c:p:")
    except getopt.GetoptError, desc:
       usage (defaultport, defaultmaxdown, desc)
 
@@ -317,6 +387,8 @@ def main ():
          compressed = 'gz'
       elif option == '-j':
          compressed = 'bz2'
+      elif option == '-Z':
+         compressed = 'zip'
       elif option == '-u':
          compressed = ''
 
