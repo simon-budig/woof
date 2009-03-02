@@ -232,13 +232,13 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                if compressed == 'zip':
                   ezfile = EvilZipStreamWrapper (self.wfile)
                   zfile = zipfile.ZipFile (ezfile, 'w', zipfile.ZIP_DEFLATED)
-		  stripoff = os.path.dirname (self.filename) + os.sep
+                  stripoff = os.path.dirname (self.filename) + os.sep
 
                   for root, dirs, files in os.walk (self.filename):
-                     for file in files:
-                        filename = os.path.join (root, file)
-			if filename[:len (stripoff)] != stripoff:
-			   raise RuntimeException, "invalid filename assumptions, please report!"
+                     for f in files:
+                        filename = os.path.join (root, f)
+                        if filename[:len (stripoff)] != stripoff:
+                           raise RuntimeException, "invalid filename assumptions, please report!"
                         zfile.write (filename, filename[len (stripoff):])
                   zfile.close ()
                else:
