@@ -24,9 +24,10 @@
 # FreeBSD support with the help from Andy Gimblett, <A.M.Gimblett@swansea.ac.uk>
 # Cygwin support by Stefan Reichör <stefan@xsteve.at>
 # tarfile usage suggested by Morgan Lefieux <comete@geekandfree.org>
+# File upload support loosely based on code from Stephen English <steve@secomputing.co.uk>
 
-import sys, os, socket, getopt, commands
-import urllib, BaseHTTPServer
+import sys, os, errno, socket, getopt, commands, tempfile
+import cgi, urllib, BaseHTTPServer
 import ConfigParser
 import shutil, tarfile, zipfile
 import struct
@@ -35,6 +36,7 @@ maxdownloads = 1
 TM = object
 cpid = -1
 compressed = 'gz'
+upload = False
 
 
 class EvilZipStreamWrapper(TM):
@@ -163,8 +165,104 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
          BaseHTTPServer.BaseHTTPRequestHandler.log_request (self, code, size)
 
 
+   def do_POST (self):
+      global maxdownloads, upload
+
+      if not upload:
+         self.send_error (501, "Unsupported method (POST)")
+         return
+      
+      # taken from
+      # http://mail.python.org/pipermail/python-list/2006-September/402441.html
+
+      ctype, pdict = cgi.parse_header (self.headers.getheader ('Content-Type'))
+      form = cgi.FieldStorage (fp = self.rfile,
+                               headers = self.headers,
+                               environ = {'REQUEST_METHOD' : 'POST'},
+                               keep_blank_values = 1,
+                               strict_parsing = 1)
+      if not form.has_key ("upfile"):
+         self.send_error (403, "No upload provided")
+         return
+         
+      upfile = form["upfile"]
+
+      if not upfile.file or not upfile.filename:
+         self.send_error (403, "No upload provided")
+         return
+      
+      upfilename = upfile.filename
+
+      if "\\" in upfilename:
+         upfilename = upfilename.split ("\\")[-1]
+
+      upfilename = os.path.basename (upfile.filename)
+
+      destfile = None
+      for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]:
+         destfilename = os.path.join (".", upfilename + suffix)
+         try:
+            destfile = os.open (destfilename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0644)
+            break
+         except OSError, e:
+            if e.errno == errno.EEXIST:
+               continue
+            raise
+
+      if not destfile:
+         upfilename += "."
+         destfile, destfilename = tempfile.mkstemp (prefix = upfilename, dir = ".")
+
+      print >>sys.stderr, "accepting uploaded file: %s -> %s" % (upfilename, destfilename)
+
+      shutil.copyfileobj (upfile.file, os.fdopen (destfile, "w"))
+      
+      if upfile.done == -1:
+         self.send_error (408, "upload interrupted")
+
+      txt = """\
+              <html>
+                <head><title>Woof Upload</title></head>
+                <body>
+                  <h1>Woof Upload complete</title></h1>
+                  <p>Thanks a lot!</p>
+                </body>
+              </html>
+            """
+      self.send_response (200)
+      self.send_header ("Content-Type", "text/html")
+      self.send_header ("Content-Length", str (len (txt)))
+      self.end_headers ()
+      self.wfile.write (txt)
+
+      maxdownloads -= 1
+
+      return
+      
+
    def do_GET (self):
-      global maxdownloads, cpid, compressed
+      global maxdownloads, cpid, compressed, upload
+
+      # Form for uploading a file
+      if upload:
+         txt = """\
+                 <html>
+                   <head><title>Woof Upload</title></head>
+                   <body>
+                     <h1>Woof Upload</title></h1>
+                     <form name="upload" method="POST" enctype="multipart/form-data">
+                       <p><input type="file" name="upfile" /></p>
+                       <p><input type="submit" value="Upload!" /></p>
+                     </form>
+                   </body>
+                 </html>
+               """
+         self.send_response (200)
+         self.send_header ("Content-Type", "text/html")
+         self.send_header ("Content-Length", str (len (txt)))
+         self.end_headers ()
+         self.wfile.write (txt)
+         return
 
       # Redirect any request to the filename of the file to serve.
       # This hands over the filename to the client.
@@ -189,7 +287,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                 </html>\n""" % location
          self.send_response (302)
          self.send_header ("Location", location)
-         self.send_header ("Content-type", "text/html")
+         self.send_header ("Content-Type", "text/html")
          self.send_header ("Content-Length", str (len (txt)))
          self.end_headers ()
          self.wfile.write (txt)
@@ -217,7 +315,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
             sys.exit (1)
 
          self.send_response (200)
-         self.send_header ("Content-type", "application/octet-stream")
+         self.send_header ("Content-Type", "application/octet-stream")
          if os.path.isfile (self.filename):
             self.send_header ("Content-Length",
                               os.path.getsize (self.filename))
@@ -285,6 +383,7 @@ def usage (defport, defmaxdown, errmsg = None):
     Usage: %s [-i <ip_addr>] [-p <port>] [-c <count>] <file>
            %s [-i <ip_addr>] [-p <port>] [-c <count>] [-z|-j|-Z|-u] <dir>
            %s [-i <ip_addr>] [-p <port>] [-c <count>] -s
+           %s [-i <ip_addr>] [-p <port>] [-c <count>] -U
    
     Serves a single file <count> times via http on port <port> on IP
     address <ip_addr>.
@@ -295,6 +394,8 @@ def usage (defport, defmaxdown, errmsg = None):
     file described below.
 
     When -s is specified instead of a filename, %s distributes itself.
+
+    When -U is specified, woof provides an upload form and allows uploading files.
    
     defaults: count = %d, port = %d
 
@@ -310,7 +411,8 @@ def usage (defport, defmaxdown, errmsg = None):
         count = 2
         ip = 127.0.0.1
         compressed = gz
-   """ % (name, name, name, name, defmaxdown, defport)
+   """ % (name, name, name, name, name, defmaxdown, defport)
+
    if errmsg:
       print >>sys.stderr, errmsg
       print >>sys.stderr
@@ -319,7 +421,7 @@ def usage (defport, defmaxdown, errmsg = None):
 
 
 def main ():
-   global cpid, compressed
+   global cpid, upload, compressed
 
    maxdown = 1
    port = 8080
@@ -352,7 +454,7 @@ def main ():
    defaultmaxdown = maxdown
 
    try:
-      options, filenames = getopt.getopt (sys.argv[1:], "hszjZui:c:p:")
+      options, filenames = getopt.getopt (sys.argv[1:], "hUszjZui:c:p:")
    except getopt.GetoptError, desc:
       usage (defaultport, defaultmaxdown, desc)
 
@@ -383,6 +485,9 @@ def main ():
       elif option == '-h':
          usage (defaultport, defaultmaxdown)
 
+      elif option == '-U':
+         upload = True
+
       elif option == '-z':
          compressed = 'gz'
       elif option == '-j':
@@ -395,19 +500,26 @@ def main ():
       else:
          usage (defaultport, defaultmaxdown, "Unknown option: %r" % option)
 
-   if len (filenames) == 1:
-      filename = os.path.abspath (filenames[0])
+   if upload:
+      if len (filenames) > 0:
+         usage (defaultport, defaultmaxdown,
+                "Conflicting usage: simultaneous up- and download not supported.")
+      filename = None
+
    else:
-      usage (defaultport, defaultmaxdown,
-             "Can only serve single files/directories.")
+      if len (filenames) == 1:
+         filename = os.path.abspath (filenames[0])
+      else:
+         usage (defaultport, defaultmaxdown,
+                "Can only serve single files/directories.")
 
-   if not os.path.exists (filename):
-      usage (defaultport, defaultmaxdown,
-             "%s: No such file or directory" % filenames[0])
+      if not os.path.exists (filename):
+         usage (defaultport, defaultmaxdown,
+                "%s: No such file or directory" % filenames[0])
 
-   if not (os.path.isfile (filename) or os.path.isdir (filename)):
-      usage (defaultport, defaultmaxdown,
-             "%s: Neither file nor directory" % filenames[0])
+      if not (os.path.isfile (filename) or os.path.isdir (filename)):
+         usage (defaultport, defaultmaxdown,
+                "%s: Neither file nor directory" % filenames[0])
 
    serve_files (filename, maxdown, ip_addr, port)
 
