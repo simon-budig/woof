@@ -93,61 +93,24 @@ class EvilZipStreamWrapper(TM):
 # reached from the outside. Quite nasty problem actually.
 
 def find_ip ():
-   if sys.platform == "cygwin":
-      ipcfg = os.popen("ipconfig").readlines()
-      for l in ipcfg:
-         try:
-            candidat = l.split(":")[1].strip()
-            if candidat[0].isdigit():
-               break
-         except:
-            pass
-      return candidat
+   # we get a UDP-socket for the TEST-networks reserved by IANA.
+   # It is highly unlikely, that there is special routing used
+   # for these networks, hence the socket later should give us
+   # the ip address of the default route.
+   # We're doing multiple tests, to guard against the computer being
+   # part of a test installation.
 
-   os.environ["PATH"] = "/sbin:/usr/sbin:/usr/local/sbin:" + os.environ["PATH"]
-   platform = os.uname()[0];
+   candidates = []
+   for test_ip in ["192.0.2.0", "198.51.100.0", "203.0.113.0"]:
+      s = socket.socket (socket.AF_INET, socket.SOCK_DGRAM)
+      s.connect ((test_ip, 80))
+      ip_addr = s.getsockname ()[0]
+      s.close ()
+      if ip_addr in candidates:
+         return ip_addr
+      candidates.append (ip_addr)
 
-   if platform == "Linux":
-      netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
-      defiface = [i.split ()[-1] for i in netstat.split ('\n')
-                                    if i.split ()[0] == "0.0.0.0"]
-   elif platform in ("Darwin", "FreeBSD", "NetBSD"):
-      netstat = commands.getoutput ("LC_MESSAGES=C netstat -rn")
-      defiface = [i.split ()[-1] for i in netstat.split ('\n')
-                                    if len(i) > 2 and i.split ()[0] == "default"]
-   elif platform == "SunOS":
-      netstat = commands.getoutput ("LC_MESSAGES=C netstat -arn")
-      defiface = [i.split ()[-1] for i in netstat.split ('\n')
-                                    if len(i) > 2 and i.split ()[0] == "0.0.0.0"]
-   else:
-      print >>sys.stderr, "Unsupported platform; please add support for your platform in find_ip().";
-      return None
-
-   if not defiface:
-      return None
-
-   if platform == "Linux":
-      ifcfg = commands.getoutput ("PATH=$PATH:/sbin:/usr/sbin:/usr/local/sbin "
-                                  + "LC_MESSAGES=C ifconfig "
-                                  + defiface[0]).split ("inet addr:")
-   elif platform in ("Darwin", "FreeBSD", "SunOS", "NetBSD"):
-      ifcfg = commands.getoutput ("PATH=$PATH:/sbin:/usr/sbin:/usr/local/sbin "
-                                  + "LC_MESSAGES=C ifconfig "
-                                  + defiface[0]).split ("inet ")
-
-   if len (ifcfg) != 2:
-      return None
-   ip_addr = ifcfg[1].split ()[0]
-
-   # sanity check
-   try:
-      ints = [ i for i in ip_addr.split (".") if 0 <= int(i) <= 255]
-      if len (ints) != 4:
-         return None
-   except ValueError:
-      return None
-
-   return ip_addr
+   return candidates[0]
 
    
 # Main class implementing an HTTP-Requesthandler, that serves just a single
