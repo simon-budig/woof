@@ -407,7 +407,7 @@ def woof_client (url):
    if disp:
       disp = disp.split(";")
 
-   if disp[0].lower() == 'attachment':
+   if disp and disp[0].lower() == 'attachment':
       fname = [x[9:] for x in disp[1:] if x[:9].lower() == "filename="]
       if len (fname):
          fname = fname[0]
@@ -419,7 +419,7 @@ def woof_client (url):
       urlparts = urlparse.urlparse (url)
       fname = urlparts[2]
 
-   if fname == None:
+   if not fname:
       fname = "woof-out.bin"
 
    if fname:
