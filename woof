@@ -27,7 +27,8 @@
 # File upload support loosely based on code from Stephen English <steve@secomputing.co.uk>
 
 import sys, os, errno, socket, getopt, commands, tempfile
-import cgi, urllib, BaseHTTPServer
+import cgi, urllib, urlparse, BaseHTTPServer
+import readline
 import ConfigParser
 import shutil, tarfile, zipfile
 import struct
@@ -281,6 +282,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
 
          self.send_response (200)
          self.send_header ("Content-Type", "application/octet-stream")
+         self.send_header ("Content-Disposition", "attachment;filename=%s" % urllib.quote (os.path.basename (self.filename)))
          if os.path.isfile (self.filename):
             self.send_header ("Content-Length",
                               os.path.getsize (self.filename))
@@ -335,7 +337,7 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
    if not ip_addr:
       ip_addr = find_ip ()
    if ip_addr:
-      print "Now serving on http://%s:%s/" % (ip_addr, httpd.server_port)
+      print "Now serving on http://%s:%s/%s" % (ip_addr, httpd.server_port, urllib.quote (os.path.basename (filename)))
 
    while cpid != 0 and maxdownloads > 0:
       httpd.handle_request ()
@@ -349,6 +351,8 @@ def usage (defport, defmaxdown, errmsg = None):
            %s [-i <ip_addr>] [-p <port>] [-c <count>] [-z|-j|-Z|-u] <dir>
            %s [-i <ip_addr>] [-p <port>] [-c <count>] -s
            %s [-i <ip_addr>] [-p <port>] [-c <count>] -U
+
+           %s <url>
    
     Serves a single file <count> times via http on port <port> on IP
     address <ip_addr>.
@@ -360,9 +364,12 @@ def usage (defport, defmaxdown, errmsg = None):
 
     When -s is specified instead of a filename, %s distributes itself.
 
-    When -U is specified, woof provides an upload form and allows uploading files.
+    When -U is specified, woof provides an upload form, allowing file uploads.
    
     defaults: count = %d, port = %d
+
+    If started with an url as an argument, woof acts as a client,
+    downloading the file and saving it in the current directory.
 
     You can specify different defaults in two locations: /etc/woofrc
     and ~/.woofrc can be INI-style config files containing the default
@@ -376,12 +383,92 @@ def usage (defport, defmaxdown, errmsg = None):
         count = 2
         ip = 127.0.0.1
         compressed = gz
-   """ % (name, name, name, name, name, defmaxdown, defport)
+   """ % (name, name, name, name, name, name, defmaxdown, defport)
 
    if errmsg:
       print >>sys.stderr, errmsg
       print >>sys.stderr
    sys.exit (1)
+
+
+
+def woof_client (url):
+   urlparts = urlparse.urlparse (url, "http")
+   if urlparts[0] not in [ "http", "https" ] or urlparts[1] == '':
+      return None
+
+   fname = None
+
+   f = urllib.urlopen (url)
+
+   f_meta = f.info ()
+   disp = f_meta.getheader ("Content-Disposition")
+
+   if disp:
+      disp = disp.split(";")
+
+   if disp[0].lower() == 'attachment':
+      fname = [x[9:] for x in disp[1:] if x[:9].lower() == "filename="]
+      if len (fname):
+         fname = fname[0]
+      else:
+         fname = None
+
+   if fname == None:
+      url = f.geturl()
+      urlparts = urlparse.urlparse (url)
+      fname = urlparts[2]
+
+   if fname == None:
+      fname = "woof-out.bin"
+
+   if fname:
+      fname = urllib.unquote (fname)
+      fname = os.path.basename (fname)
+
+   readline.set_startup_hook (lambda: readline.insert_text (fname))
+   fname = raw_input ("Enter target filename: ")
+   readline.set_startup_hook (None)
+
+   override = False
+
+   destfile = None
+   destfilename = os.path.join (".", fname)
+   try:
+      destfile = os.open (destfilename,
+                          os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0644)
+   except OSError, e:
+      if e.errno == errno.EEXIST:
+         override = raw_input ("File exists. Overwrite (y/n)? ")
+	 override = override.lower() in [ "y", "yes" ]
+      else:
+         raise
+
+   if destfile == None:
+      if override == True:
+         destfile = os.open (destfilename, os.O_WRONLY | os.O_CREAT, 0644)
+      else:
+         for suffix in [".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]:
+            destfilename = os.path.join (".", fname + suffix)
+            try:
+               destfile = os.open (destfilename,
+                                   os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0644)
+               break
+            except OSError, e:
+               if e.errno == errno.EEXIST:
+                  continue
+               raise
+
+         if not destfile:
+            destfile, destfilename = tempfile.mkstemp (prefix = fname + ".",
+                                                    dir = ".")
+         print "alternate filename is:", destfilename
+
+   print "downloading file: %s -> %s" % (fname, destfilename)
+
+   shutil.copyfileobj (f, os.fdopen (destfile, "w"))
+
+   return 1;
 
 
 
@@ -473,6 +560,9 @@ def main ():
 
    else:
       if len (filenames) == 1:
+         if woof_client (filenames[0]) != None:
+            sys.exit (0)
+
          filename = os.path.abspath (filenames[0])
       else:
          usage (defaultport, defaultmaxdown,
@@ -502,5 +592,5 @@ if __name__=='__main__':
    try:
       main ()
    except KeyboardInterrupt:
-      pass
+      print
 
