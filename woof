@@ -346,17 +346,20 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
    if not ip_addr:
       ip_addr = find_ip ()
    if ip_addr:
-      location = "http://%s:%s/%s" % (ip_addr, httpd.server_port,
-                                      urllib.quote (os.path.basename (filename)))
-      if os.path.isdir (filename):
-         if compressed == 'gz':
-            location += ".tar.gz"
-         elif compressed == 'bz2':
-            location += ".tar.bz2"
-         elif compressed == 'zip':
-            location += ".zip"
-         else:
-            location += ".tar"
+      if filename:
+         location = "http://%s:%s/%s" % (ip_addr, httpd.server_port,
+                                         urllib.quote (os.path.basename (filename)))
+         if os.path.isdir (filename):
+            if compressed == 'gz':
+               location += ".tar.gz"
+            elif compressed == 'bz2':
+               location += ".tar.bz2"
+            elif compressed == 'zip':
+               location += ".zip"
+            else:
+               location += ".tar"
+      else:
+         location = "http://%s:%s/" % (ip_addr, httpd.server_port)
 
       print "Now serving on %s" % location
 
