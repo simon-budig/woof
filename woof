@@ -113,7 +113,17 @@ def find_ip ():
 
    return candidates[0]
 
-   
+
+# our own HTTP server class, fixing up a change in python 2.7
+# since we do our fork() in the request handler
+# the server must not shutdown() the socket.
+
+class ForkingHTTPServer (BaseHTTPServer.HTTPServer):
+   def process_request(self, request, client_address):
+      self.finish_request (request, client_address)
+      self.close_request (request)
+
+
 # Main class implementing an HTTP-Requesthandler, that serves just a single
 # file and redirects all other requests to this file (this passes the actual
 # filename to the client).
@@ -310,7 +320,7 @@ class FileServHTTPRequestHandler (BaseHTTPServer.BaseHTTPRequestHandler):
                   tfile = tarfile.open (mode=('w|' + compressed),
                                         fileobj=self.wfile)
                   tfile.add (self.filename,
-                             arcname=os.path.basename(self.filename))
+                             arcname=os.path.basename (self.filename))
                   tfile.close ()
          except Exception, e:
             print e
@@ -328,8 +338,7 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
    FileServHTTPRequestHandler.filename = filename
 
    try:
-      httpd = BaseHTTPServer.HTTPServer ((ip_addr, port),
-                                         FileServHTTPRequestHandler)
+      httpd = ForkingHTTPServer ((ip_addr, port), FileServHTTPRequestHandler)
    except socket.error:
       print >>sys.stderr, "cannot bind to IP address '%s' port %d" % (ip_addr, port)
       sys.exit (1)
@@ -405,17 +414,17 @@ def woof_client (url):
    disp = f_meta.getheader ("Content-Disposition")
 
    if disp:
-      disp = disp.split(";")
+      disp = disp.split (";")
 
-   if disp and disp[0].lower() == 'attachment':
-      fname = [x[9:] for x in disp[1:] if x[:9].lower() == "filename="]
+   if disp and disp[0].lower () == 'attachment':
+      fname = [x[9:] for x in disp[1:] if x[:9].lower () == "filename="]
       if len (fname):
          fname = fname[0]
       else:
          fname = None
 
    if fname == None:
-      url = f.geturl()
+      url = f.geturl ()
       urlparts = urlparse.urlparse (url)
       fname = urlparts[2]
 
@@ -440,7 +449,7 @@ def woof_client (url):
    except OSError, e:
       if e.errno == errno.EEXIST:
          override = raw_input ("File exists. Overwrite (y/n)? ")
-	 override = override.lower() in [ "y", "yes" ]
+         override = override.lower () in [ "y", "yes" ]
       else:
          raise
 
@@ -479,8 +488,8 @@ def main ():
    port = 8080
    ip_addr = ''
 
-   config = ConfigParser.ConfigParser()
-   config.read (['/etc/woofrc', os.path.expanduser('~/.woofrc')])
+   config = ConfigParser.ConfigParser ()
+   config.read (['/etc/woofrc', os.path.expanduser ('~/.woofrc')])
 
    if config.has_option ('main', 'port'):
       port = config.getint ('main', 'port')
