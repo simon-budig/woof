@@ -242,7 +242,7 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
 
          self.send_response (200)
          self.send_header ("Content-Type", "application/octet-stream")
-         self.send_header ("Content-Disposition", "attachment;filename=%s" % urllib.parse.quote (os.path.basename (self.filename)))
+         self.send_header ("Content-Disposition", "attachment;filename=%s" % urllib.parse.quote (os.path.basename (self.filename + self.archive_ext)))
          if os.path.isfile (self.filename):
             self.send_header ("Content-Length",
                               os.path.getsize (self.filename))
@@ -282,10 +282,22 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
 
    maxdownloads = maxdown
 
+   archive_ext = ""
+   if filename and os.path.isdir (filename):
+      if compressed == 'gz':
+         archive_ext = ".tar.gz"
+      elif compressed == 'bz2':
+         archive_ext = ".tar.bz2"
+      elif compressed == 'zip':
+         archive_ext = ".zip"
+      else:
+         archive_ext = ".tar"
+
    # We have to somehow push the filename of the file to serve to the
    # class handling the requests. This is an evil way to do this...
 
-   FileServHTTPRequestHandler.filename = filename
+   FileServHTTPRequestHandler.filename    = filename
+   FileServHTTPRequestHandler.archive_ext = archive_ext
 
    try:
       httpd = ForkingHTTPServer ((ip_addr, port), FileServHTTPRequestHandler)
@@ -297,17 +309,8 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
       ip_addr = find_ip ()
    if ip_addr:
       if filename:
-         location = "http://%s:%s/%s" % (ip_addr, httpd.server_port,
-                                         urllib.parse.quote (os.path.basename (filename)))
-         if os.path.isdir (filename):
-            if compressed == 'gz':
-               location += ".tar.gz"
-            elif compressed == 'bz2':
-               location += ".tar.bz2"
-            elif compressed == 'zip':
-               location += ".zip"
-            else:
-               location += ".tar"
+         location = (f"http://{ip_addr}:{httpd.server_port}/" +
+               urllib.parse.quote (os.path.basename (filename + archive_ext)))
       else:
          location = "http://%s:%s/" % (ip_addr, httpd.server_port)
 
