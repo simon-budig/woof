@@ -558,7 +558,7 @@ def main():
       filename = None
    
    else:
-       if len(filenames) == 1:
+      if len(filenames) == 1:
          if woof_client(filenames[0]) != None:
             os.sys.exit(0)
          
