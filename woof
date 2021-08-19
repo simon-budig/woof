@@ -106,44 +106,50 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
                                environ = {'REQUEST_METHOD' : 'POST'},
                                keep_blank_values = 1,
                                strict_parsing = 1)
-      if "upfile" not in form:
+      if "upfiles" not in form:
          self.send_error (403, "No upload provided")
          return
 
-      upfile = form["upfile"]
-
-      if not upfile.file or not upfile.filename:
+      upfiles = form["upfiles"]
+      if not isinstance(upfiles, list):
+         upfiles = list()
+         upfiles.append(form["upfiles"])
+      elif len(upfiles) == 0:
          self.send_error (403, "No upload provided")
          return
 
-      upfilename = upfile.filename
+      for upfile in upfiles:
+         if not upfile.file or not upfile.filename:
+            self.send_error (403, "No upload provided")
+            continue
 
-      if "\\" in upfilename:
-         upfilename = upfilename.split ("\\")[-1]
+         upfilename = upfile.filename
+         if "\\" in upfilename:
+            upfilename = upfilename.split ("\\")[-1]
+         upfilename = os.path.basename (upfile.filename)
 
-      upfilename = os.path.basename (upfile.filename)
+         destfile = None
+         for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]:
+            destfilename = os.path.join (".", upfilename + suffix)
+            try:
+               destfile = os.open (destfilename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+               break
+            except OSError as e:
+               if e.errno == errno.EEXIST:
+                  continue
+               raise
 
-      destfile = None
-      for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]:
-         destfilename = os.path.join (".", upfilename + suffix)
-         try:
-            destfile = os.open (destfilename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-            break
-         except OSError as e:
-            if e.errno == errno.EEXIST:
-               continue
-            raise
+         if not destfile:
+            upfilename += "."
+            destfile, destfilename = tempfile.mkstemp (prefix = upfilename, dir = ".")
 
-      if not destfile:
-         upfilename += "."
-         destfile, destfilename = tempfile.mkstemp (prefix = upfilename, dir = ".")
+         print ("accepting uploaded file: %s -> %s" % (upfilename, destfilename), file=sys.stderr)
 
-      print ("accepting uploaded file: %s -> %s" % (upfilename, destfilename), file=sys.stderr)
+         shutil.copyfileobj (upfile.file, os.fdopen (destfile, "wb"))
 
-      shutil.copyfileobj (upfile.file, os.fdopen (destfile, "wb"))
-
-      if upfile.done == -1:
-         self.send_error (408, "upload interrupted")
+         if upfile.done == -1:
+            self.send_error (408, "upload interrupted")
+            return
 
       txt = b"""\
               <html>
@@ -176,7 +182,7 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
                    <body>
                      <h1>Woof Upload</title></h1>
                      <form name="upload" method="POST" enctype="multipart/form-data">
-                       <p><input type="file" name="upfile" /></p>
+                       <p><input type="file" name="upfiles" multiple /></p>
                        <p><input type="submit" value="Upload!" /></p>
                      </form>
                    </body>
