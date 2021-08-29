@@ -321,7 +321,7 @@ def serve_files (filename, maxdown = 1, ip_addr = '', port = 8080):
 
 
 
-def usage (defport, defmaxdown, errmsg = None):
+def usage (defport, defmaxdown, xdgdir, errmsg = None):
    name = os.path.basename (sys.argv[0])
    print ("""
     Usage: %s [-i <ip_addr>] [-p <port>] [-c <count>] <file>
@@ -348,10 +348,10 @@ def usage (defport, defmaxdown, errmsg = None):
     If started with an url as an argument, woof acts as a client,
     downloading the file and saving it in the current directory.
 
-    You can specify different defaults in two locations: /etc/woofrc
-    and ~/.woofrc can be INI-style config files containing the default
-    port and the default count. The file in the home directory takes
-    precedence. The compression methods are "off", "gz", "bz2" or "zip".
+    You can specify different defaults in three locations: /etc/woofrc,
+    ~/.woofrc and %s can be INI-style config files containing the default
+    port and the default count. The last file takes precedence.
+    The compression methods are "off", "gz", "bz2" or "zip".
 
     Sample file:
 
@@ -360,7 +360,7 @@ def usage (defport, defmaxdown, errmsg = None):
         count = 2
         ip = 127.0.0.1
         compressed = gz
-   """ % (name, name, name, name, name, name, defmaxdown, defport), file=sys.stderr)
+   """ % (name, name, name, name, name, name, defmaxdown, defport, xdgdir), file=sys.stderr)
 
    if errmsg:
       print (errmsg, file=sys.stderr)
@@ -456,8 +456,18 @@ def main ():
    port = 8080
    ip_addr = ''
 
+   configs = ['/etc/woofrc', os.path.expanduser ('~/.woofrc')]
+   try:
+      if os.environ['XDG_CONFIG_HOME'] is not '':
+         xdgdir = os.path.expanduser (os.environ['XDG_CONFIG_HOME'] + '/woofrc')
+      else:
+         xdgdir = os.path.expanduser ('~/.config/woofrc')
+   except KeyError:
+      xdgdir = os.path.expanduser ('~/.config/woofrc')
+   configs.append (xdgdir)
+
    config = configparser.ConfigParser ()
-   config.read (['/etc/woofrc', os.path.expanduser ('~/.woofrc')])
+   config.read (configs)
 
    if config.has_option ('main', 'port'):
       port = config.getint ('main', 'port')
@@ -485,7 +495,7 @@ def main ():
    try:
       options, filenames = getopt.getopt (sys.argv[1:], "hUszjZui:c:p:")
    except getopt.GetoptError as desc:
-      usage (defaultport, defaultmaxdown, desc)
+      usage (defaultport, defaultmaxdown, xdgdir, desc)
 
    for option, val in options:
       if option == '-c':
@@ -494,7 +504,7 @@ def main ():
             if maxdown <= 0:
                raise ValueError
          except ValueError:
-            usage (defaultport, defaultmaxdown,
+            usage (defaultport, defaultmaxdown, xdgdir,
                    "invalid download count: %r. "
                    "Please specify an integer >= 0." % val)
 
@@ -505,14 +515,14 @@ def main ():
          try:
             port = int (val)
          except ValueError:
-            usage (defaultport, defaultmaxdown,
+            usage (defaultport, defaultmaxdown, xdgdir,
                    "invalid port number: %r. Please specify an integer" % val)
 
       elif option == '-s':
          filenames.append (__file__)
 
       elif option == '-h':
-         usage (defaultport, defaultmaxdown)
+         usage (defaultport, defaultmaxdown, xdgdir)
 
       elif option == '-U':
          upload = True
@@ -527,11 +537,11 @@ def main ():
          compressed = ''
 
       else:
-         usage (defaultport, defaultmaxdown, "Unknown option: %r" % option)
+         usage (defaultport, defaultmaxdown, xdgdir, "Unknown option: %r" % option)
 
    if upload:
       if len (filenames) > 0:
-         usage (defaultport, defaultmaxdown,
+         usage (defaultport, defaultmaxdown, xdgdir,
                 "Conflicting usage: simultaneous up- and download not supported.")
       filename = None
 
@@ -542,15 +552,15 @@ def main ():
 
          filename = os.path.abspath (filenames[0])
       else:
-         usage (defaultport, defaultmaxdown,
+         usage (defaultport, defaultmaxdown, xdgdir,
                 "Can only serve single files/directories.")
 
       if not os.path.exists (filename):
-         usage (defaultport, defaultmaxdown,
+         usage (defaultport, defaultmaxdown, xdgdir,
                 "%s: No such file or directory" % filenames[0])
 
       if not (os.path.isfile (filename) or os.path.isdir (filename)):
-         usage (defaultport, defaultmaxdown,
+         usage (defaultport, defaultmaxdown, xdgdir,
                 "%s: Neither file nor directory" % filenames[0])
 
    serve_files (filename, maxdown, ip_addr, port)
