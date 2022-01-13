@@ -483,7 +483,7 @@ def main ():
    defaultmaxdown = maxdown
 
    try:
-      options, filenames = getopt.getopt (sys.argv[1:], "hUszjZui:c:p:")
+      options, filenames = getopt.gnu_getopt (sys.argv[1:], "hUszjZui:c:p:")
    except getopt.GetoptError as desc:
       usage (defaultport, defaultmaxdown, desc)
 
