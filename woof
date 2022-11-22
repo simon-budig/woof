@@ -37,7 +37,7 @@ maxdownloads = 1
 cpid = -1
 compressed = 'gz'
 upload = False
-
+version = 0.4
 
 # Utility function to guess the IP (as a string) where the server can be
 # reached from the outside. Quite nasty problem actually.
@@ -369,6 +369,19 @@ def usage (defport, defmaxdown, errmsg = None):
 
 
 
+def show_version (version, errmsg = None):
+   name = os.path.basename (sys.argv[0])
+   print ("""
+    %s %s
+   """ % (name, version), file=sys.stderr)
+
+   if errmsg:
+      print (errmsg, file=sys.stderr)
+      print (file=sys.stderr)
+   sys.exit (1)
+
+
+
 def woof_client (url):
    urlparts = urllib.parse.urlparse (url, "http")
    if urlparts[0] not in [ "http", "https" ] or urlparts[1] == '':
@@ -483,7 +496,7 @@ def main ():
    defaultmaxdown = maxdown
 
    try:
-      options, filenames = getopt.gnu_getopt (sys.argv[1:], "hUszjZui:c:p:")
+      options, filenames = getopt.gnu_getopt (sys.argv[1:], "hVUszjZui:c:p:")
    except getopt.GetoptError as desc:
       usage (defaultport, defaultmaxdown, desc)
 
@@ -513,6 +526,9 @@ def main ():
 
       elif option == '-h':
          usage (defaultport, defaultmaxdown)
+
+      elif option == '-V':
+         show_version (version)
 
       elif option == '-U':
          upload = True
@@ -570,4 +586,4 @@ if __name__=='__main__':
       main ()
    except KeyboardInterrupt:
       print ()
-
+   
