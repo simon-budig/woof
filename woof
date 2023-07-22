@@ -26,12 +26,18 @@
 # tarfile usage suggested by Morgan Lefieux <comete@geekandfree.org>
 # File upload support loosely based on code from Stephen English <steve@secomputing.co.uk>
 
+from __future__ import annotations
+
+from typing import Generator, BinaryIO
+
 import sys, os, errno, socket, getopt, subprocess, tempfile
-import cgi, urllib.request, urllib.parse, http.server
+import urllib.request, urllib.parse, http.server
+import email.parser
 import readline
 import configparser
 import shutil, tarfile, zipfile
 import struct
+from io import BytesIO, StringIO
 
 maxdownloads = 1
 cpid = -1
@@ -63,6 +69,27 @@ def find_ip ():
    return candidates[0]
 
 
+def decode_multipart_form_data(
+   multipart_data: BinaryIO, headers: email.message.Message
+) -> list[tuple[dict[str, str], bytes]]:
+   """Decode multipart form data"""
+   content_type = headers["Content-Type"].encode("ascii")
+   content_len = int(headers["Content-Length"])
+   data = multipart_data.read(content_len)
+
+   content = b"Content-Type: %b\r\n%b" % (content_type, data)
+
+   parsed = email.parser.BytesParser().parsebytes(content)
+
+   results = []
+   for part in parsed.get_payload():
+      params = part.get_params(header="content-disposition")
+      payload: bytes = part.get_payload(decode=True)
+      result = dict(params), payload
+      results.append(result)
+   return results
+
+
 # our own HTTP server class, fixing up a change in python 2.7
 # since we do our fork() in the request handler
 # the server must not shutdown() the socket.
@@ -87,7 +114,7 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
 
    def log_request (self, code='-', size='-'):
       if code == 200:
-         http.server.BaseHTTPRequestHandler.log_request (self, code, size)
+         super().log_request (code, size)
 
 
    def do_POST (self):
@@ -97,31 +124,26 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
          self.send_error (501, "Unsupported method (POST)")
          return
 
-      # taken from
-      # http://mail.python.org/pipermail/python-list/2006-September/402441.html
+      multi_form = decode_multipart_form_data(self.rfile, self.headers)
 
-      ctype, pdict = cgi.parse_header (self.headers['Content-Type'])
-      form = cgi.FieldStorage (fp = self.rfile,
-                               headers = self.headers,
-                               environ = {'REQUEST_METHOD' : 'POST'},
-                               keep_blank_values = 1,
-                               strict_parsing = 1)
-      if "upfile" not in form:
+      for form_dict, content in multi_form:
+         if form_dict.get("name") == "upfile":
+            break
+      else:
+         # Went through without break, did not find
+         self.send_error(403, "No upload provided")
+         return
+
+      if not content or not form_dict.get("filename"):
          self.send_error (403, "No upload provided")
          return
 
-      upfile = form["upfile"]
-
-      if not upfile.file or not upfile.filename:
-         self.send_error (403, "No upload provided")
-         return
-
-      upfilename = upfile.filename
+      upfilename = form_dict["filename"]
 
       if "\\" in upfilename:
-         upfilename = upfilename.split ("\\")[-1]
+         upfilename = upfilename.rsplit ("\\", 1)[-1]
 
-      upfilename = os.path.basename (upfile.filename)
+      upfilename = os.path.basename (upfilename)
 
       destfile = None
       for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]:
@@ -129,8 +151,8 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
          try:
             destfile = os.open (destfilename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             break
-         except OSError as e:
-            if e.errno == errno.EEXIST:
+         except OSError as ex:
+            if ex.errno == errno.EEXIST:
                continue
             raise
 
@@ -138,14 +160,17 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
          upfilename += "."
          destfile, destfilename = tempfile.mkstemp (prefix = upfilename, dir = ".")
 
-      print ("accepting uploaded file: %s -> %s" % (upfilename, destfilename), file=sys.stderr)
+      print ("Accepting uploaded file: %s -> %s" % (upfilename, destfilename), file=sys.stderr)
 
-      shutil.copyfileobj (upfile.file, os.fdopen (destfile, "wb"))
+      with BytesIO(content) as readfile:
+         with open(destfile, "wb") as writefile:
+            shutil.copyfileobj (readfile, writefile)
 
-      if upfile.done == -1:
-         self.send_error (408, "upload interrupted")
+      # if upfile.done == -1:
+      #   self.send_error (408, "upload interrupted")
 
       txt = b"""\
+              <!DOCTYPE html>
               <html>
                 <head><title>Woof Upload</title></head>
                 <body>
@@ -171,6 +196,7 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
       # Form for uploading a file
       if upload:
          txt = b"""\
+                 <!DOCTYPE html>
                  <html>
                    <head><title>Woof Upload</title></head>
                    <body>
@@ -206,6 +232,7 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
 
       if self.path != location:
          txt = """\
+                <!DOCTYPE html>
                 <html>
                    <head><title>302 Found</title></head>
                    <body>302 Found <a href="%s">here</a>.</body>
@@ -228,7 +255,6 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
 
       if cpid == 0:
          # Child process
-         child = None
          type = None
 
          if os.path.isfile (self.filename):
@@ -245,35 +271,35 @@ class FileServHTTPRequestHandler (http.server.BaseHTTPRequestHandler):
          self.send_header ("Content-Disposition", "attachment;filename=%s" % urllib.parse.quote (os.path.basename (self.filename + self.archive_ext)))
          if os.path.isfile (self.filename):
             self.send_header ("Content-Length",
-                              os.path.getsize (self.filename))
+                              str(os.path.getsize (self.filename)))
          self.end_headers ()
 
          try:
             if type == "file":
-               datafile = open (self.filename, "rb")
-               shutil.copyfileobj (datafile, self.wfile)
-               datafile.close ()
+               with open (self.filename, "rb") as datafile:
+                  shutil.copyfileobj (datafile, self.wfile)
             elif type == "dir":
                if compressed == 'zip':
-                  zfile = zipfile.ZipFile (self.wfile, 'w', zipfile.ZIP_DEFLATED)
-                  stripoff = os.path.dirname (self.filename) + os.sep
+                  with zipfile.ZipFile(
+                     self.wfile, "w", zipfile.ZIP_DEFLATED
+                  ) as zfile:
+                     stripoff = os.path.dirname (self.filename) + os.sep
 
-                  for root, dirs, files in os.walk (self.filename):
-                     for f in files:
-                        filename = os.path.join (root, f)
-                        if filename[:len (stripoff)] != stripoff:
-                           raise RuntimeException ("invalid filename assumptions, please report!")
-                        zfile.write (filename, filename[len (stripoff):])
-                  zfile.close ()
+                     for root, dirs, files in os.walk (self.filename):
+                        for f in files:
+                           filename = os.path.join (root, f)
+                           if filename[:len (stripoff)] != stripoff:
+                              raise RuntimeError ("invalid filename assumptions, please report!")
+                           zfile.write (filename, filename[len (stripoff):])
                else:
-                  tfile = tarfile.open (mode=('w|' + compressed),
-                                        fileobj=self.wfile)
-                  tfile.add (self.filename,
-                             arcname=os.path.basename (self.filename))
-                  tfile.close ()
+                  with tarfile.open(
+                     mode=("w|" + compressed), fileobj=self.wfile
+                  ) as tfile:
+                     tfile.add (self.filename,
+                                arcname=os.path.basename (self.filename))
 
-         except Exception as e:
-            print (e)
+         except Exception as ex:
+            print (ex)
             print ("Connection broke. Aborting", file=sys.stderr)
 
 
@@ -570,4 +596,3 @@ if __name__=='__main__':
       main ()
    except KeyboardInterrupt:
       print ()
-
