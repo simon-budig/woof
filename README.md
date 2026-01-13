@@ -1,3 +1,10 @@
+# This repository has moved!
+
+> [!CAUTION]
+> Due to the AInshittification of github I've moved the repository to codeberg,
+> see https://codeberg.org/nomis/woof. I won't do further development
+> here on github.
+
 # Simply exchange files with WOOF
 
 I guess everybody with a laptop has experienced this problem at some
